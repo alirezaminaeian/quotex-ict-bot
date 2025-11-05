@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pytz
 import pandas as pd
 from dotenv import load_dotenv
+import base64
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -65,8 +66,24 @@ def load_env() -> Dict[str, str]:
         "TELEGRAM_TOKEN": os.getenv("TELEGRAM_TOKEN", ""),
         "TELEGRAM_CHAT_ID": os.getenv("TELEGRAM_CHAT_ID", ""),
         "HEADLESS": os.getenv("HEADLESS", "false").lower() == "true",
+        "SESSION_B64": os.getenv("SESSION_B64", ""),
     }
     return env
+
+
+def ensure_session_from_env(session_b64: str) -> None:
+    """If SESSION_B64 is provided (base64 of pickled session dict), write to SESSION_FILE."""
+    if not session_b64:
+        return
+    try:
+        if not os.path.exists(SESSION_FILE):
+            data = base64.b64decode(session_b64)
+            os.makedirs(os.path.dirname(SESSION_FILE), exist_ok=True)
+            with open(SESSION_FILE, "wb") as f:
+                f.write(data)
+            logging.info("Session restored from SESSION_B64 env variable")
+    except Exception as e:
+        logging.error(f"Failed writing session from env: {e}")
 
 
 def init_driver(headless: bool = False) -> webdriver.Chrome:
@@ -547,6 +564,9 @@ def main() -> None:
     if not env["TELEGRAM_TOKEN"] or not env["TELEGRAM_CHAT_ID"]:
         print("لطفاً توکن و چت‌آی‌دی تلگرام را در .env تنظیم کن.")
         return
+
+    # If running on server without filesystem session, allow env-based session injection
+    ensure_session_from_env(env.get("SESSION_B64", ""))
 
     driver = init_driver(headless=env["HEADLESS"])
 
