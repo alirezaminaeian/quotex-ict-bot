@@ -198,28 +198,65 @@ def save_session(driver: webdriver.Chrome) -> None:
 def load_session(driver: webdriver.Chrome, base_url: str) -> bool:
     """Load cookies and localStorage if session file exists. Return True if dashboard loads."""
     if not os.path.exists(SESSION_FILE):
+        logging.warning(f"Session file not found: {SESSION_FILE}")
         return False
     try:
         # Load on root first to match cookie domain, then go to trade
         driver.get("https://qxbroker.com/")
+        logging.info(f"Loaded root domain. Current URL: {driver.current_url}")
+        
         with open(SESSION_FILE, "rb") as f:
             data = pickle.load(f)
-        # Load cookies
-        for ck in data.get("cookies", []):
+        
+        cookies = data.get("cookies", [])
+        ls = data.get("localStorage", {})
+        
+        logging.info(f"Session file contains {len(cookies)} cookies and {len(ls)} localStorage items")
+        
+        # Load cookies (try both domains)
+        loaded_count = 0
+        for ck in cookies:
             try:
+                # Try original domain
                 driver.add_cookie(ck)
-            except WebDriverException:
-                pass
+                loaded_count += 1
+            except WebDriverException as e:
+                # Try without domain restriction
+                try:
+                    ck_copy = ck.copy()
+                    if "domain" in ck_copy:
+                        del ck_copy["domain"]
+                    driver.add_cookie(ck_copy)
+                    loaded_count += 1
+                except:
+                    logging.debug(f"Failed to load cookie {ck.get('name', 'unknown')}: {e}")
+        
+        logging.info(f"Successfully loaded {loaded_count}/{len(cookies)} cookies")
+        
         # Load localStorage
-        ls: Dict[str, str] = data.get("localStorage", {})
         for k, v in ls.items():
-            driver.execute_script("localStorage.setItem(arguments[0], arguments[1]);", k, v)
+            try:
+                driver.execute_script("localStorage.setItem(arguments[0], arguments[1]);", k, v)
+            except Exception as e:
+                logging.debug(f"Failed to set localStorage[{k}]: {e}")
+        
+        # Navigate to trade page
         driver.get("https://qxbroker.com/fa/trade")
+        time.sleep(2)  # Give page time to load
         driver.refresh()
+        time.sleep(2)
+        
+        logging.info(f"After refresh, URL: {driver.current_url}")
+        
         # Check if dashboard appears
-        return is_logged_in(driver)
+        logged_in = is_logged_in(driver)
+        if logged_in:
+            logging.info("Session loaded successfully - user is logged in")
+        else:
+            logging.warning(f"Session loaded but login check failed. URL: {driver.current_url}")
+        return logged_in
     except Exception as e:
-        logging.error(f"Failed to load session: {e}")
+        logging.error(f"Failed to load session: {e}", exc_info=True)
         return False
 
 
@@ -341,10 +378,24 @@ def manual_login_with_2fa(driver: webdriver.Chrome, email: str, password: str) -
 
 def login_with_session(driver: webdriver.Chrome, email: str, password: str) -> bool:
     """Try session login first. If fail, perform manual login and save session."""
-    base_trade = "https://qxbroker.com/en/trade"
+    base_trade = "https://qxbroker.com/fa/trade"
+    logging.info("Attempting to load existing session...")
     if load_session(driver, base_trade):
+        logging.info("Session login successful!")
         return True
+    
+    logging.warning("Session login failed. Attempting manual login...")
+    # On server (headless), manual login with 2FA won't work (needs input)
+    # So we just return False and log the error
+    if os.getenv("HEADLESS", "false").lower() == "true":
+        logging.error("Cannot perform manual login in headless/server mode. Session file may be invalid or expired.")
+        return False
+    
     ok = manual_login_with_2fa(driver, email, password)
+    if ok:
+        logging.info("Manual login successful!")
+    else:
+        logging.error("Manual login also failed!")
     return ok
 
 
