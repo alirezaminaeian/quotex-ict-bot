@@ -103,8 +103,17 @@ def init_driver(headless: bool = False) -> webdriver.Chrome:
     chrome_options.add_experimental_option('useAutomationExtension', False)
 
     # Prefer system Chromium/Chromedriver if present (Railway/Nixpacks)
-    chrome_bin = os.getenv("CHROME_BIN", "/usr/bin/chromium")
-    chromedriver_path = os.getenv("CHROMEDRIVER_PATH", "/usr/bin/chromedriver")
+    import shutil
+    chrome_bin = os.getenv("CHROME_BIN", "") or (
+        shutil.which("chromium")
+        or shutil.which("chromium-browser")
+        or shutil.which("google-chrome-stable")
+        or shutil.which("google-chrome")
+        or "/usr/bin/chromium"
+    )
+    chromedriver_path = os.getenv("CHROMEDRIVER_PATH", "") or (
+        shutil.which("chromedriver") or "/usr/bin/chromedriver"
+    )
     try:
         if os.path.exists(chrome_bin):
             chrome_options.binary_location = chrome_bin
