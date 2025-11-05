@@ -87,53 +87,91 @@ def ensure_session_from_env(session_b64: str) -> None:
 
 
 def init_driver(headless: bool = False) -> webdriver.Chrome:
-    """Initialize Chrome WebDriver.
-    Priority:
-      1) Use system Chromium + Chromedriver (e.g., Railway/Nixpacks at /usr/bin).
-      2) Fallback to webdriver-manager download.
+    """Initialize Chrome WebDriver for Docker/Railway environments.
+    
+    Strategy:
+      1) Try system Chrome/Chromium + ChromeDriver (from env vars or auto-detect)
+      2) Fallback to webdriver-manager with proper flags for Docker
+    
+    All required flags for headless Docker execution are included:
+    - --no-sandbox: Required for Docker
+    - --disable-dev-shm-usage: Prevents /dev/shm issues
+    - --headless: Headless mode
+    - --disable-gpu: GPU not available in Docker
+    - --remote-debugging-port: For debugging (optional but useful)
     """
+    import shutil
+    
     chrome_options = webdriver.ChromeOptions()
+    
+    # Essential flags for Docker/headless execution
     if headless:
         chrome_options.add_argument("--headless=new")
-    chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1280,900")
-    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"]) 
+    chrome_options.add_argument("--remote-debugging-port=9222")
+    chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--disable-software-rasterizer")
+    chrome_options.add_argument("--disable-background-timer-throttling")
+    chrome_options.add_argument("--disable-backgrounding-occluded-windows")
+    chrome_options.add_argument("--disable-renderer-backgrounding")
+    
+    # Anti-detection flags
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_experimental_option('useAutomationExtension', False)
-
-    # Prefer system Chromium/Chromedriver if present (Railway/Nixpacks)
-    import shutil
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    
+    # Try system Chrome/Chromium first (preferred for Docker)
     chrome_bin = os.getenv("CHROME_BIN", "") or (
-        shutil.which("chromium")
-        or shutil.which("chromium-browser")
-        or shutil.which("google-chrome-stable")
+        shutil.which("google-chrome-stable")
         or shutil.which("google-chrome")
+        or shutil.which("chromium-browser")
+        or shutil.which("chromium")
+        or "/usr/bin/google-chrome-stable"
         or "/usr/bin/chromium"
     )
     chromedriver_path = os.getenv("CHROMEDRIVER_PATH", "") or (
-        shutil.which("chromedriver") or "/usr/bin/chromedriver"
+        shutil.which("chromedriver")
+        or "/usr/local/bin/chromedriver"
+        or "/usr/bin/chromedriver"
     )
+    
+    # Try system Chrome/ChromeDriver first
     try:
-        if os.path.exists(chrome_bin):
+        if chrome_bin and os.path.exists(chrome_bin):
             chrome_options.binary_location = chrome_bin
-        if os.path.exists(chromedriver_path):
+            logging.info(f"Using Chrome binary: {chrome_bin}")
+        
+        if chromedriver_path and os.path.exists(chromedriver_path):
+            # Make sure chromedriver is executable
+            os.chmod(chromedriver_path, 0o755)
             service = Service(chromedriver_path)
             driver = webdriver.Chrome(service=service, options=chrome_options)
             driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
                 "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
             })
+            logging.info("ChromeDriver initialized from system path")
             return driver
-    except Exception:
-        pass
-
-    # Fallback: webdriver-manager (downloads matching driver)
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=chrome_options)
-    driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-        "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-    })
-    return driver
+    except Exception as e:
+        logging.warning(f"Failed to use system Chrome/ChromeDriver: {e}. Falling back to webdriver-manager.")
+    
+    # Fallback: webdriver-manager (downloads matching ChromeDriver version)
+    try:
+        if chrome_bin and os.path.exists(chrome_bin):
+            chrome_options.binary_location = chrome_bin
+        
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+            "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        })
+        logging.info("ChromeDriver initialized via webdriver-manager")
+        return driver
+    except Exception as e:
+        logging.error(f"Failed to initialize ChromeDriver: {e}")
+        raise
 
 
 def save_session(driver: webdriver.Chrome) -> None:
