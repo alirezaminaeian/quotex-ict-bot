@@ -67,6 +67,7 @@ def load_env() -> Dict[str, str]:
         "TELEGRAM_CHAT_ID": os.getenv("TELEGRAM_CHAT_ID", ""),
         "HEADLESS": os.getenv("HEADLESS", "false").lower() == "true",
         "SESSION_B64": os.getenv("SESSION_B64", ""),
+        "USER_AGENT": os.getenv("USER_AGENT", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"),
     }
     return env
 
@@ -112,6 +113,12 @@ def init_driver(headless: bool = False) -> webdriver.Chrome:
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1280,900")
     chrome_options.add_argument("--remote-debugging-port=9222")
+    # Locale & UA
+    chrome_options.add_argument("--lang=fa-IR")
+    chrome_options.add_argument("--accept-lang=fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7")
+    ua = os.getenv("USER_AGENT")
+    if ua:
+        chrome_options.add_argument(f"--user-agent={ua}")
     chrome_options.add_argument("--disable-extensions")
     chrome_options.add_argument("--disable-software-rasterizer")
     chrome_options.add_argument("--disable-background-timer-throttling")
@@ -193,7 +200,8 @@ def load_session(driver: webdriver.Chrome, base_url: str) -> bool:
     if not os.path.exists(SESSION_FILE):
         return False
     try:
-        driver.get(base_url)
+        # Load on root first to match cookie domain, then go to trade
+        driver.get("https://qxbroker.com/")
         with open(SESSION_FILE, "rb") as f:
             data = pickle.load(f)
         # Load cookies
@@ -206,6 +214,7 @@ def load_session(driver: webdriver.Chrome, base_url: str) -> bool:
         ls: Dict[str, str] = data.get("localStorage", {})
         for k, v in ls.items():
             driver.execute_script("localStorage.setItem(arguments[0], arguments[1]);", k, v)
+        driver.get("https://qxbroker.com/fa/trade")
         driver.refresh()
         # Check if dashboard appears
         return is_logged_in(driver)
@@ -217,10 +226,16 @@ def load_session(driver: webdriver.Chrome, base_url: str) -> bool:
 def is_logged_in(driver: webdriver.Chrome) -> bool:
     """Heuristic: detect a dashboard element that only exists after login."""
     try:
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "[data-qa='balance']"))
+        selectors = [
+            "[data-qa='balance']",
+            "[data-qa='header-balance']",
+            "[class*='balance']",
+            "[data-qa='asset-selector']",
+        ]
+        WebDriverWait(driver, 15).until(
+            lambda d: any(len(d.find_elements(By.CSS_SELECTOR, s)) > 0 for s in selectors)
         )
-        return True
+        return "/trade" in (driver.current_url or "")
     except TimeoutException:
         return False
 
