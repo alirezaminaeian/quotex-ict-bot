@@ -87,7 +87,11 @@ def ensure_session_from_env(session_b64: str) -> None:
 
 
 def init_driver(headless: bool = False) -> webdriver.Chrome:
-    """Initialize Chrome WebDriver using webdriver-manager."""
+    """Initialize Chrome WebDriver.
+    Priority:
+      1) Use system Chromium + Chromedriver (e.g., Railway/Nixpacks at /usr/bin).
+      2) Fallback to webdriver-manager download.
+    """
     chrome_options = webdriver.ChromeOptions()
     if headless:
         chrome_options.add_argument("--headless=new")
@@ -98,6 +102,23 @@ def init_driver(headless: bool = False) -> webdriver.Chrome:
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"]) 
     chrome_options.add_experimental_option('useAutomationExtension', False)
 
+    # Prefer system Chromium/Chromedriver if present (Railway/Nixpacks)
+    chrome_bin = os.getenv("CHROME_BIN", "/usr/bin/chromium")
+    chromedriver_path = os.getenv("CHROMEDRIVER_PATH", "/usr/bin/chromedriver")
+    try:
+        if os.path.exists(chrome_bin):
+            chrome_options.binary_location = chrome_bin
+        if os.path.exists(chromedriver_path):
+            service = Service(chromedriver_path)
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+            driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+            })
+            return driver
+    except Exception:
+        pass
+
+    # Fallback: webdriver-manager (downloads matching driver)
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=chrome_options)
     driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
